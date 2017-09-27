@@ -7,7 +7,8 @@
 #include <signal.h>
 
 #include "util.h"
-#include "thread.h"
+#include "stat.h"
+#include "rxtx.h"
 #include "control.h"
 
 #define CLIENT_RXQ_NAME "dpdkr%u_rx"
@@ -135,13 +136,13 @@ static int __lcore_main(__attribute__((__unused__))void *arg)
 	param = &lcore_param[lcoreid];
 
 	if (param->is_stat) {
-		thread_stat_run();
+		stat_thread_run();
 	} else if (param->is_rx && param->is_tx) {
-		thread_rx_tx_run(rx_ring, tx_ring);
+		rxtx_thread_run_rxtx(rx_ring, tx_ring);
 	} else if (param->is_rx) {
-		thread_rx_run(rx_ring);
+		rxtx_thread_run_rx(rx_ring);
 	} else if (param->is_tx) {
-		thread_tx_run(tx_ring);
+		rxtx_thread_run_tx(tx_ring);
 	}
 
 	LOG_INFO("lcore %u finished.", lcoreid);
@@ -184,7 +185,7 @@ int main(int argc, char *argv[])
 
 	is_create_stat = __set_lcore();
 	if (is_create_stat) {
-		if (pthread_create(&tid, NULL, (void *)thread_stat_run, NULL)) {
+		if (pthread_create(&tid, NULL, (void *)stat_thread_run, NULL)) {
 			rte_exit(EXIT_FAILURE, "Cannot create statistics thread\n");
 		}
 	}

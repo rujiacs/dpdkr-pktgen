@@ -42,7 +42,7 @@ include $(RTE_SDK)/mk/rte.vars.mk
 APP = pktgen
 
 # all source are stored in SRCS-y
-SRCS-y := main.c control.c thread.c
+SRCS-y := main.c control.c rxtx.c stat.c
 
 CFLAGS += $(WERROR_FLAGS)
 
