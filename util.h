@@ -14,6 +14,7 @@
 #include <sys/mman.h>
 #include <sys/ioctl.h>
 #include <time.h>
+#include <limits.h>
 #include <sys/syscall.h>
 #include <sys/resource.h>
 

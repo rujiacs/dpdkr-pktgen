@@ -3,13 +3,36 @@
 #include <rte_ring.h>
 #include <rte_config.h>
 
-#include "util.h"
 #include <getopt.h>
+#include <signal.h>
+
+#include "util.h"
+#include "thread.h"
+#include "control.h"
 
 #define CLIENT_RXQ_NAME "dpdkr%u_rx"
 #define CLIENT_TXQ_NAME "dpdkr%u_tx"
 
 static unsigned int client_id = -1;
+
+struct lcore_param {
+	bool is_rx;
+	bool is_tx;
+	bool is_stat;
+};
+
+#define LCORE_MAX 3
+
+static struct lcore_param lcore_param[RTE_MAX_LCORE] = {
+	{
+		.is_rx = false,
+		.is_tx = false,
+		.is_stat = false,
+	},
+};
+
+struct rte_ring *rx_ring;
+struct rte_ring *tx_ring;
 
 static const char *__get_rxq_name(unsigned int id)
 {
@@ -53,7 +76,7 @@ static int __parse_options(int argc, char *argv[])
 		switch(opt) {
 			case 'n':
 				if (__parse_client_num(optarg) != 0) {
-					RTE_LOG(ERR, RING, "Wrong client id %s\n", optarg);
+					LOG_ERROR("Wrong client id %s", optarg);
 					__usage(progname);
 					return -1;
 				}
@@ -66,14 +89,74 @@ static int __parse_options(int argc, char *argv[])
 	return 0;
 }
 
+/* return value: if need to create stats thread */
+static bool __set_lcore(void)
+{
+	unsigned core = 0;
+	unsigned used_core[3] = {UINT_MAX}, used = 0;
+
+	for (core = 0; core < RTE_MAX_LCORE; core++) {
+		if (rte_lcore_is_enabled(core) == 0)
+			continue;
+
+		used_core[used] = core;
+		used++;
+		if (used >= 3)
+			break;
+	}
+
+	if (used == 1) {
+		lcore_param[used_core[0]].is_rx = true;
+		lcore_param[used_core[0]].is_tx = true;
+		return true;
+	} else if (used == 2) {
+		lcore_param[used_core[0]].is_rx = true;
+		lcore_param[used_core[1]].is_tx = true;
+		return true;
+	} else if (used == 3) {
+		lcore_param[used_core[0]].is_rx = true;
+		lcore_param[used_core[1]].is_tx = true;
+		lcore_param[used_core[2]].is_stat = true;
+		return false;
+	}
+	return false;
+}
+
+static int __lcore_main(__attribute__((__unused__))void *arg)
+{
+	unsigned lcoreid;
+	struct lcore_param *param;
+
+	lcoreid = rte_lcore_id();
+//	if (lcoreid >= LCORE_MAX)
+//		return 0;
+
+	LOG_INFO("lcore %u started.", lcoreid);
+	param = &lcore_param[lcoreid];
+
+	if (param->is_stat) {
+		thread_stat_run();
+	} else if (param->is_rx && param->is_tx) {
+		thread_rx_tx_run(rx_ring, tx_ring);
+	} else if (param->is_rx) {
+		thread_rx_run(rx_ring);
+	} else if (param->is_tx) {
+		thread_tx_run(tx_ring);
+	}
+
+	LOG_INFO("lcore %u finished.", lcoreid);
+	return 0;
+}
+
 int main(int argc, char *argv[])
 {
-	struct rte_ring *rx_ring = NULL;
-	struct rte_ring *tx_ring = NULL;
 	int retval = 0;
+	int coreid = 0;
+	bool is_create_stat = false;
+	pthread_t tid;
 
 	if ((retval = rte_eal_init(argc, argv)) < 0) {
-		RTE_LOG(ERR, EAL, "Failed to initialize dpdk eal");
+		LOG_ERROR("Failed to initialize dpdk eal");
 		return -1;
 	}
 
@@ -83,6 +166,9 @@ int main(int argc, char *argv[])
 	if (__parse_options(argc, argv) < 0) {
 		rte_exit(EXIT_FAILURE, "Invalid command-line arguments\n");
 	}
+
+	signal(SIGINT, ctl_signal_handler);
+	signal(SIGTERM, ctl_signal_handler);
 
 	rx_ring = rte_ring_lookup(__get_rxq_name(client_id));
 	if (rx_ring == NULL) {
@@ -96,6 +182,30 @@ int main(int argc, char *argv[])
 						client_id);
 	}
 
-	RTE_LOG(INFO, RING, "Processing client %u\n", client_id);
+	is_create_stat = __set_lcore();
+	if (is_create_stat) {
+		if (pthread_create(&tid, NULL, (void *)thread_stat_run, NULL)) {
+			rte_exit(EXIT_FAILURE, "Cannot create statistics thread\n");
+		}
+	}
+
+	LOG_INFO("Processing client %u", client_id);
+
+	retval = rte_eal_mp_remote_launch(__lcore_main, NULL, CALL_MASTER);
+	if (retval < 0) {
+		rte_exit(EXIT_FAILURE, "mp launch failed\n");
+	}
+	RTE_LCORE_FOREACH_SLAVE(coreid) {
+		if (rte_eal_wait_lcore(coreid) < 0) {
+			retval = -1;
+			break;
+		}
+	}
+
+	if (is_create_stat) {
+		pthread_join(tid, NULL);
+	}
+
+	LOG_INFO("Done.");
 	return 0;
 }
