@@ -8,4 +8,6 @@ void rxtx_thread_run_rx(struct rte_ring *rx_ring);
 
 void rxtx_thread_run_tx(struct rte_ring *tx_ring);
 
+void rxtx_set_rate(const char *rate_str);
+
 #endif /* _PKTGEN_RXTX_H_ */
