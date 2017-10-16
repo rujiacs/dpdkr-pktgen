@@ -25,14 +25,15 @@ struct pkt_seq_info {
 	uint16_t seq_cnt;
 };
 
-#define PKT_PROBE_MAGIC 'P'
+#define PKT_PROBE_MAGIC ('P' << 3)
 
 struct pkt_probe {
 	struct ether_hdr eth_hdr;
 	struct ipv4_hdr ip_hdr;
 	struct udp_hdr udp_hdr;
-	uint32_t probe_id;
-	uint8_t probe_magic;
+	uint32_t probe_idx;
+	uint32_t probe_magic;
+//	uint8_t pad[10];
 };
 
 #define IPv4(a, b, c, d)   ((uint32_t)(((a) & 0xff) << 24) |   \
@@ -47,15 +48,24 @@ struct pkt_probe {
 #define PKT_SEQ_IP_DST IPv4(192,168,0,21)
 #define PKT_SEQ_PORT_SRC 1024
 #define PKT_SEQ_PORT_DST 1024
-#define PKT_SEQ_PKT_LEN 64
+#define PKT_SEQ_PKT_LEN 60
 #define PKT_SEQ_CNT 100
-
-#define MAGIC_NUM 'L'
 
 void pkt_seq_init(struct pkt_seq_info *info);
 
-struct pkt_probe *pkt_seq_create_templete(
+struct pkt_probe *pkt_seq_create_template(
 					struct pkt_seq_info *info);
+
+int pkt_seq_get_idx(struct rte_mbuf *pkt, uint32_t *idx);
+
+/* Ethernet frame format */
+#define ETH_PREAMBLE_SIZE 8
+#define ETH_INTERPKT_SIZE 12
+
+static inline uint16_t pkt_seq_wire_size(uint16_t pkt_len)
+{
+	return (pkt_len + ETH_PREAMBLE_SIZE + ETH_INTERPKT_SIZE);
+}
 
 /* Return the number of bits in mask */
 static __inline__ int

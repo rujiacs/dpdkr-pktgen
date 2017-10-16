@@ -3,6 +3,7 @@
 #include "stat.h"
 
 #include <rte_lcore.h>
+#include <rte_cycles.h>
 
 enum {
 	STAT_RX_IDX = 0,
@@ -30,8 +31,30 @@ static void __process_stat(struct stat_info *stat,
 				(unsigned long)((pkts - last_p) * STAT_PERIOD_MULTI));
 }
 
+static void __summary_stat(uint64_t cycles)
+{
+	double sec = 0;
+	uint64_t rx_bytes, rx_pkts, tx_bytes, tx_pkts;
+
+	sec = (double)cycles / rte_get_tsc_hz();
+	rx_bytes = ring_stat[STAT_RX_IDX].stat_bytes;
+	rx_pkts = ring_stat[STAT_RX_IDX].stat_pkts;
+	tx_bytes = ring_stat[STAT_TX_IDX].stat_bytes;
+	tx_pkts = ring_stat[STAT_TX_IDX].stat_pkts;
+
+	LOG_INFO("Running %lf seconds.", sec);
+	LOG_INFO("\tRX %lu bytes (%lf bps), %lu packets (%lf pps)",
+					rx_bytes, (rx_bytes * 8 / sec),
+					rx_pkts, (rx_pkts / sec));
+	LOG_INFO("\tTX %lu bytes (%lf bps), %lu packets (%lf pps)",
+					tx_bytes, (tx_bytes * 8 / sec),
+					tx_pkts, (tx_pkts / sec));
+}
+
 void stat_thread_run(void)
 {
+	uint64_t start_cyc = 0, end_cyc = 0;
+
 	/* init */
 	memset(ring_stat, 0, sizeof(struct stat_info) * STAT_IDX_MAX);
 
@@ -39,13 +62,17 @@ void stat_thread_run(void)
 					rte_lcore_id());
 	ctl_stat_inited();
 
-	while (!ctl_is_stop()) {
+	start_cyc = rte_get_tsc_cycles();
+
+	while (!ctl_is_stat_stop()) {
 		// TODO
 		usleep(STAT_PERIOD_USEC);
-		// rx
 		__process_stat(&ring_stat[STAT_RX_IDX], "RX");
 		__process_stat(&ring_stat[STAT_TX_IDX], "TX");
 	}
+
+	end_cyc = rte_get_tsc_cycles();
+	__summary_stat(end_cyc - start_cyc);
 }
 
 static void __update_stat(struct stat_info *stat, uint64_t byte)

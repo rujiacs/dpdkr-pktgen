@@ -1,12 +1,16 @@
 #ifndef _PKTGEN_RXTX_H_
 #define _PKTGEN_RXTX_H_
 
-void rxtx_thread_run_rxtx(struct rte_ring *rx_ring,
-				struct rte_ring *tx_ring);
+struct rte_mempool;
+struct pkt_seq_info;
 
-void rxtx_thread_run_rx(struct rte_ring *rx_ring);
+void rxtx_thread_run_rxtx(int portid, struct rte_mempool *mp,
+				struct pkt_seq_info *seq);
 
-void rxtx_thread_run_tx(struct rte_ring *tx_ring);
+void rxtx_thread_run_rx(int portid);
+
+void rxtx_thread_run_tx(int portid, struct rte_mempool *mp,
+				struct pkt_seq_info *seq);
 
 void rxtx_set_rate(const char *rate_str);
 
