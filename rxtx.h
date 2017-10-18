@@ -4,7 +4,7 @@
 struct rte_mempool;
 struct pkt_seq_info;
 
-void rxtx_thread_run_rxtx(int portid, struct rte_mempool *mp,
+void rxtx_thread_run_rxtx(int sender, int recv, struct rte_mempool *mp,
 				struct pkt_seq_info *seq);
 
 void rxtx_thread_run_rx(int portid);

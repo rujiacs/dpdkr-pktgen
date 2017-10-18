@@ -12,12 +12,12 @@ void pkt_seq_init(struct pkt_seq_info *info)
 {
 	int i = 0;
 
-	for (i = 0; i < 5; i++) {
-		info->src_mac.addr_bytes[i] = ETHER_LOCAL_ADMIN_ADDR;
-		info->dst_mac.addr_bytes[i] = ETHER_LOCAL_ADMIN_ADDR;
+	for (i = 0; i < 6; i++) {
+		info->src_mac.addr_bytes[i] = 0;
+		info->dst_mac.addr_bytes[i] = 0;
 	}
 	info->src_mac.addr_bytes[5] = PKT_SEQ_MAC_SRC;
-	info->dst_mac.addr_bytes[5] = PKT_SEQ_MAC_DST;
+//	info->dst_mac.addr_bytes[5] = PKT_SEQ_MAC_DST;
 
 	info->src_ip = PKT_SEQ_IP_SRC;
 	info->dst_ip = PKT_SEQ_IP_DST;

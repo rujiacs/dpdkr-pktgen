@@ -26,6 +26,7 @@ struct pkt_seq_info {
 };
 
 #define PKT_PROBE_MAGIC ('P' << 3)
+#define PKT_PROBE_INITVAL 7
 
 struct pkt_probe {
 	struct ether_hdr eth_hdr;
@@ -49,7 +50,7 @@ struct pkt_probe {
 #define PKT_SEQ_PORT_SRC 1024
 #define PKT_SEQ_PORT_DST 1024
 #define PKT_SEQ_PKT_LEN 60
-#define PKT_SEQ_CNT 100
+#define PKT_SEQ_CNT 10
 
 void pkt_seq_init(struct pkt_seq_info *info);
 
@@ -58,13 +59,11 @@ struct pkt_probe *pkt_seq_create_template(
 
 int pkt_seq_get_idx(struct rte_mbuf *pkt, uint32_t *idx);
 
-/* Ethernet frame format */
-#define ETH_PREAMBLE_SIZE 8
-#define ETH_INTERPKT_SIZE 12
+#define ETH_CRC_LEN 4
 
 static inline uint16_t pkt_seq_wire_size(uint16_t pkt_len)
 {
-	return (pkt_len + ETH_PREAMBLE_SIZE + ETH_INTERPKT_SIZE);
+	return (pkt_len + ETH_CRC_LEN);
 }
 
 /* Return the number of bits in mask */

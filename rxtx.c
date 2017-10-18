@@ -5,6 +5,7 @@
 #include <rte_mbuf.h>
 #include <rte_ether.h>
 #include <rte_ethdev.h>
+#include <rte_hash_crc.h>
 
 #include "util.h"
 #include "control.h"
@@ -113,6 +114,7 @@ static inline bool __copy_buf_to_pkt(void *buf, unsigned len,
 static void __prepare_probe_mbuf(struct rte_mempool *mp)
 {
 	struct rte_mbuf *pkt = NULL;
+	uint32_t crc = 0;
 
 	if (next_pkt != NULL)
 		return;
@@ -123,8 +125,8 @@ static void __prepare_probe_mbuf(struct rte_mempool *mp)
 		return;
 	}
 
-	pkt->pkt_len = probe_pkt_len;
-	pkt->data_len = probe_pkt_len;
+	pkt->pkt_len = probe_pkt_len + ETH_CRC_LEN;
+	pkt->data_len = probe_pkt_len + ETH_CRC_LEN;
 	/* the number of packet segments */
 	pkt->nb_segs = 1;
 
@@ -133,8 +135,25 @@ static void __prepare_probe_mbuf(struct rte_mempool *mp)
 	if (!__copy_buf_to_pkt(probe_pkt, sizeof(struct pkt_probe),
 							pkt, 0)) {
 		LOG_ERROR("Failed to copy probe packet into mbuf");
-		return;
+		goto close_free_mbuf;
 	}
+
+	/* calculate ethernet frame checksum */
+	crc = rte_hash_crc(rte_pktmbuf_mtod(pkt, void *),
+					probe_pkt_len, PKT_PROBE_INITVAL);
+	LOG_INFO("Packet CRC %x", crc);
+
+	if (!__copy_buf_to_pkt(&crc, sizeof(uint32_t),
+							pkt, probe_pkt_len)) {
+		LOG_ERROR("Failed to copy FCS into mbuf");
+		goto close_free_mbuf;
+	}
+
+#ifdef PKTGEN_DEBUG
+	crc = rte_hash_crc(rte_pktmbuf_mtod(pkt, void *),
+					probe_pkt_len + 4, PKT_PROBE_INITVAL);
+	LOG_INFO("Check FCS %x", crc);
+#endif
 
 	/* complete packet mbuf */
 	pkt->ol_flags = 0;
@@ -144,6 +163,12 @@ static void __prepare_probe_mbuf(struct rte_mempool *mp)
 	pkt->l3_len = sizeof(struct ipv4_hdr);
 
 	next_pkt = pkt;
+	return;
+
+close_free_mbuf:
+	rte_pktmbuf_free(pkt);
+	next_pkt = NULL;
+	return;
 }
 
 static int __process_tx(int portid, struct rte_mempool *mp,
@@ -305,7 +330,7 @@ void rxtx_thread_run_tx(int portid, struct rte_mempool *mp,
 	ctl_rxtx_stopped(STOP_TYPE_TX);
 }
 
-void rxtx_thread_run_rxtx(int portid, struct rte_mempool *mp,
+void rxtx_thread_run_rxtx(int sender, int recv, struct rte_mempool *mp,
 				struct pkt_seq_info *seq)
 {
 	int ret = 0;
@@ -317,9 +342,9 @@ void rxtx_thread_run_rxtx(int portid, struct rte_mempool *mp,
 
 	LOG_INFO("tx running on lcore %u", rte_lcore_id());
 
-	if (portid < 0 || mp == NULL || seq == NULL) {
-		LOG_ERROR("Invalid parameters, portid %d, mp %p, seq %p",
-						portid, mp, seq);
+	if (sender < 0 || recv < 0 || mp == NULL || seq == NULL) {
+		LOG_ERROR("Invalid parameters, sender %d, recv %d, mp %p, seq %p",
+						sender, recv, mp, seq);
 		ctl_rxtx_inited();
 		ctl_rxtx_stopped(STOP_TYPE_RXTX);
 		return;
@@ -332,7 +357,7 @@ void rxtx_thread_run_rxtx(int portid, struct rte_mempool *mp,
 	while (!ctl_is_stop()) {
 		/* TX */
 		if (!is_tx_err) {
-			ret = __process_tx(portid, mp, seq, false);
+			ret = __process_tx(sender, mp, seq, false);
 			if (ret == -ERANGE || ret == -ENOMEM) {
 				is_tx_err = true;
 				LOG_ERROR("TX error!");
@@ -350,7 +375,7 @@ void rxtx_thread_run_rxtx(int portid, struct rte_mempool *mp,
 
 		/* RX */
 		if (!is_rx_err) {
-			if (__process_rx(portid) < 0) {
+			if (__process_rx(recv) < 0) {
 				LOG_ERROR("RX error!");
 				is_rx_err = true;
 			}

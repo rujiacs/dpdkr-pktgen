@@ -20,7 +20,8 @@
 #define CLIENT_MP_NAME_PREFIX	"ovs_mp_2030_0"
 #define CLIENT_MP_PREFIX_LEN 13
 
-static unsigned int client_id = -1;
+static unsigned int sender_id = -1;
+static unsigned int receiver_id = -1;
 
 struct lcore_param {
 	bool is_rx;
@@ -63,7 +64,8 @@ static const char *__get_txq_name(unsigned int id)
 
 static int __parse_client_num(const char *client)
 {
-	if (str_to_uint(client, 10, &client_id)) {
+	if (str_to_uint(client, 10, &sender_id)) {
+		receiver_id = sender_id + 1;
 		return 0;
 	}
 	return -1;
@@ -71,8 +73,8 @@ static int __parse_client_num(const char *client)
 
 static void __usage(const char *progname)
 {
-	LOG_INFO("Usage: %s [<EAL args> --proc-type=secondary] -- -n <client id>"
-					" -r <TX rate>",
+	LOG_INFO("Usage: %s [<EAL args> --proc-type=secondary] -- "
+					" -n <client id> -r <TX rate>",
 					progname);
 }
 
@@ -152,11 +154,11 @@ static int __lcore_main(__attribute__((__unused__))void *arg)
 	if (param->is_stat) {
 		stat_thread_run();
 	} else if (param->is_rx && param->is_tx) {
-		rxtx_thread_run_rxtx(ring_portid, mp, &pkt_seq);
+		rxtx_thread_run_rxtx(sender_id, receiver_id, mp, &pkt_seq);
 	} else if (param->is_rx) {
-		rxtx_thread_run_rx(ring_portid);
+		rxtx_thread_run_rx(receiver_id);
 	} else if (param->is_tx) {
-		rxtx_thread_run_tx(ring_portid, mp, &pkt_seq);
+		rxtx_thread_run_tx(sender_id, mp, &pkt_seq);
 	}
 
 	LOG_INFO("lcore %u finished.", lcoreid);
@@ -270,13 +272,22 @@ int main(int argc, char *argv[])
 	signal(SIGINT, ctl_signal_handler);
 	signal(SIGTERM, ctl_signal_handler);
 
-	if (__get_ring_dev(client_id) < 0) {
-		rte_exit(EXIT_FAILURE, "Failed to get dpdkr device\n");
+	if (__get_ring_dev(sender_id) < 0) {
+		rte_exit(EXIT_FAILURE, "Failed to get dpdkr device (sender)\n");
 	}
 
 	/* Start device */
-	if (rte_eth_dev_start(ring_portid) < 0) {
-		rte_exit(EXIT_FAILURE, "Cannot start dpdkr device\n");
+	if (rte_eth_dev_start(sender_id) < 0) {
+		rte_exit(EXIT_FAILURE, "Cannot start dpdkr device (sender)\n");
+	}
+
+	if (__get_ring_dev(receiver_id) < 0) {
+		rte_exit(EXIT_FAILURE, "Failed to get dpdkr device (receiver)\n");
+	}
+
+	/* Start device */
+	if (rte_eth_dev_start(receiver_id) < 0) {
+		rte_exit(EXIT_FAILURE, "Cannot start dpdkr device (receiver)\n");
 	}
 
 	pkt_seq_init(&pkt_seq);
@@ -288,7 +299,8 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	LOG_INFO("Processing client %u", client_id);
+	LOG_INFO("Processing client, sender %d, receiver %d",
+					sender_id, receiver_id);
 
 	retval = rte_eal_mp_remote_launch(__lcore_main, NULL, CALL_MASTER);
 	if (retval < 0) {
@@ -306,7 +318,8 @@ int main(int argc, char *argv[])
 		pthread_join(tid, NULL);
 	}
 
-	rte_eth_dev_stop(ring_portid);
+	rte_eth_dev_stop(sender_id);
+	rte_eth_dev_stop(receiver_id);
 
 	LOG_INFO("Done.");
 	return 0;
