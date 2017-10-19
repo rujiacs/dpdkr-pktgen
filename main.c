@@ -45,6 +45,7 @@ static int ring_portid;
 static struct rte_mempool *mp = NULL;
 
 static struct pkt_seq_info pkt_seq;
+static uint32_t max_idx = 0;
 
 static const char *__get_rxq_name(unsigned int id)
 {
@@ -152,7 +153,7 @@ static int __lcore_main(__attribute__((__unused__))void *arg)
 	param = &lcore_param[lcoreid];
 
 	if (param->is_stat) {
-		stat_thread_run();
+		stat_thread_run(&max_idx);
 	} else if (param->is_rx && param->is_tx) {
 		rxtx_thread_run_rxtx(sender_id, receiver_id, mp, &pkt_seq);
 	} else if (param->is_rx) {
@@ -217,12 +218,14 @@ static int __get_ring_dev(unsigned int id)
 	}
 
 	/* Find mempool created by ovs */
-	mp = __lookup_mempool();
-	if (mp != NULL) {
-		LOG_INFO("Found mempool %s", mp->name);
-	} else {
-		LOG_ERROR("Cannot find mempool for dpdkr%u", id);
-		return -1;
+	if (mp == NULL) {
+		mp = __lookup_mempool();
+		if (mp != NULL) {
+			LOG_INFO("Found mempool %s", mp->name);
+		} else {
+			LOG_ERROR("Cannot find mempool for dpdkr%u", id);
+			return -1;
+		}
 	}
 
 	/* Setup interface */
@@ -265,6 +268,8 @@ int main(int argc, char *argv[])
 	argc -= retval;
 	argv += retval;
 
+	pkt_seq_init(&pkt_seq);
+
 	if (__parse_options(argc, argv) < 0) {
 		rte_exit(EXIT_FAILURE, "Invalid command-line arguments\n");
 	}
@@ -290,11 +295,11 @@ int main(int argc, char *argv[])
 		rte_exit(EXIT_FAILURE, "Cannot start dpdkr device (receiver)\n");
 	}
 
-	pkt_seq_init(&pkt_seq);
-
 	is_create_stat = __set_lcore();
+
+	max_idx = pkt_seq.seq_cnt * PROBE_TIMEOUT;
 	if (is_create_stat) {
-		if (pthread_create(&tid, NULL, (void *)stat_thread_run, NULL)) {
+		if (pthread_create(&tid, NULL, (void *)stat_thread_run, &max_idx)) {
 			rte_exit(EXIT_FAILURE, "Cannot create statistics thread\n");
 		}
 	}

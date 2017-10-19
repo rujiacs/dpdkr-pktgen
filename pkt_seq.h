@@ -25,7 +25,7 @@ struct pkt_seq_info {
 	uint16_t seq_cnt;
 };
 
-#define PKT_PROBE_MAGIC ('P' << 3)
+#define PKT_PROBE_MAGIC 0x12345678
 #define PKT_PROBE_INITVAL 7
 
 struct pkt_probe {

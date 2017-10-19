@@ -141,7 +141,6 @@ static void __prepare_probe_mbuf(struct rte_mempool *mp)
 	/* calculate ethernet frame checksum */
 	crc = rte_hash_crc(rte_pktmbuf_mtod(pkt, void *),
 					probe_pkt_len, PKT_PROBE_INITVAL);
-	LOG_INFO("Packet CRC %x", crc);
 
 	if (!__copy_buf_to_pkt(&crc, sizeof(uint32_t),
 							pkt, probe_pkt_len)) {
@@ -205,10 +204,11 @@ static int __process_tx(int portid, struct rte_mempool *mp,
 	LOG_INFO("TX packet %u on %lu", tx_seq_iter, start_cyc);
 
 	/* update TX statistics */
-	stat_update_tx(pkt_seq_wire_size(seq->pkt_len));
+	stat_update_tx_probe(probe_pkt->probe_idx,
+					next_pkt->pkt_len, start_cyc);
 
 	/* update tx seq state */
-	tx_seq_iter++;
+	tx_seq_iter = stat_get_free_idx();
 	next_pkt = NULL;
 	if (tx_seq_iter >= seq->seq_cnt) {
 		LOG_INFO("Finished TX all of %u packets", seq->seq_cnt);
@@ -236,12 +236,15 @@ static void __rx_stat(struct rte_mbuf *pkt, uint64_t recv_cyc)
 	uint32_t probe_idx = 0;
 //	int ret = 0;
 
-	pkt_seq_get_idx(pkt, &probe_idx);
-
-	stat_update_rx(pkt->data_len);
-	LOG_INFO("RX packet %u, len %u, recv_cyc %lu",
-					probe_idx, pkt->data_len,
-					(unsigned long)recv_cyc);
+	if (pkt_seq_get_idx(pkt, &probe_idx) < 0) {
+		LOG_INFO("RX packet");
+		stat_update_rx(pkt->data_len);
+	} else {
+		stat_update_rx_probe(probe_idx, pkt->data_len, recv_cyc);
+		LOG_INFO("RX packet %u, len %u, recv_cyc %lu",
+						probe_idx, pkt->data_len,
+						(unsigned long)recv_cyc);
+	}
 }
 
 static int __process_rx(int portid)
@@ -264,11 +267,21 @@ static int __process_rx(int portid)
 void rxtx_thread_run_rx(int portid)
 {
 	/* waiting for stat thread */
-	while (!ctl_is_stat_inited() && !ctl_is_stop()) {}
+	while (ctl_get_state(WORKER_STAT) == STATE_UNINIT && !ctl_is_stop()) {}
+
+	if (ctl_get_state(WORKER_STAT) == STATE_STOPPED
+					|| ctl_get_state(WORKER_STAT) == STATE_ERROR)
+		return;
+
+	if (portid < 0) {
+		LOG_ERROR("Invalid parameters, portid %d", portid);
+		ctl_set_state(WORKER_RX, STATE_ERROR);
+		return;
+	}
 
 	LOG_INFO("rx running on lcore %u", rte_lcore_id());
 
-	ctl_rxtx_inited();
+	ctl_set_state(WORKER_RX, STATE_INITED);
 
 	while (!ctl_is_stop()) {
 		if (__process_rx(portid) < 0) {
@@ -277,7 +290,7 @@ void rxtx_thread_run_rx(int portid)
 		}
 	}
 
-	ctl_rxtx_stopped(STOP_TYPE_RX);
+	ctl_set_state(WORKER_RX, STATE_STOPPED);
 }
 
 #define MAX_RETRY 3
@@ -289,21 +302,24 @@ void rxtx_thread_run_tx(int portid, struct rte_mempool *mp,
 	unsigned int tx_retry = 0;
 
 	/* waiting for stat thread */
-	while (!ctl_is_stat_inited() && !ctl_is_stop()) {}
+	while (ctl_get_state(WORKER_STAT) == STATE_UNINIT && !ctl_is_stop()) {}
 
-	LOG_INFO("tx running on lcore %u", rte_lcore_id());
+	if (ctl_get_state(WORKER_STAT) == STATE_STOPPED
+					|| ctl_get_state(WORKER_STAT) == STATE_ERROR)
+		return;
 
 	if (portid < 0 || mp == NULL || seq == NULL) {
 		LOG_ERROR("Invalid parameters, portid %d, mp %p, seq %p",
 						portid, mp, seq);
-		ctl_rxtx_inited();
-		ctl_rxtx_stopped(STOP_TYPE_TX);
+		ctl_set_state(WORKER_TX, STATE_ERROR);
 		return;
 	}
+	LOG_INFO("tx running on lcore %u", rte_lcore_id());
 
 	__set_cycles_per_pkt(seq->pkt_len);
+	tx_seq_iter = stat_get_free_idx();
 
-	ctl_rxtx_inited();
+	ctl_set_state(WORKER_TX, STATE_INITED);
 
 	while (!ctl_is_stop()) {
 		/* TX */
@@ -327,7 +343,7 @@ void rxtx_thread_run_tx(int portid, struct rte_mempool *mp,
 	if (next_pkt != NULL)
 		rte_pktmbuf_free(next_pkt);
 
-	ctl_rxtx_stopped(STOP_TYPE_TX);
+	ctl_set_state(WORKER_TX, STATE_STOPPED);
 }
 
 void rxtx_thread_run_rxtx(int sender, int recv, struct rte_mempool *mp,
@@ -338,21 +354,27 @@ void rxtx_thread_run_rxtx(int sender, int recv, struct rte_mempool *mp,
 	unsigned int tx_retry = 0;
 
 	/* waiting for stat thread */
-	while (!ctl_is_stat_inited() && !ctl_is_stop()) {}
+	while (ctl_get_state(WORKER_STAT) == STATE_UNINIT && !ctl_is_stop()) {}
+
+	if (ctl_get_state(WORKER_STAT) == STATE_ERROR ||
+					ctl_get_state(WORKER_STAT) == STATE_STOPPED)
+		return;
 
 	LOG_INFO("tx running on lcore %u", rte_lcore_id());
 
 	if (sender < 0 || recv < 0 || mp == NULL || seq == NULL) {
 		LOG_ERROR("Invalid parameters, sender %d, recv %d, mp %p, seq %p",
 						sender, recv, mp, seq);
-		ctl_rxtx_inited();
-		ctl_rxtx_stopped(STOP_TYPE_RXTX);
+		ctl_set_state(WORKER_TX, STATE_ERROR);
+		ctl_set_state(WORKER_RX, STATE_ERROR);
 		return;
 	}
 
 	__set_cycles_per_pkt(seq->pkt_len);
+	tx_seq_iter = stat_get_free_idx();
 
-	ctl_rxtx_inited();
+	ctl_set_state(WORKER_TX, STATE_INITED);
+	ctl_set_state(WORKER_RX, STATE_INITED);
 
 	while (!ctl_is_stop()) {
 		/* TX */
@@ -389,5 +411,6 @@ void rxtx_thread_run_rxtx(int sender, int recv, struct rte_mempool *mp,
 	if (next_pkt != NULL)
 		rte_pktmbuf_free(next_pkt);
 
-	ctl_rxtx_stopped(STOP_TYPE_RXTX);
+	ctl_set_state(WORKER_TX, STATE_STOPPED);
+	ctl_set_state(WORKER_RX, STATE_STOPPED);
 }

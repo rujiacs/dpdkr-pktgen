@@ -107,20 +107,31 @@ struct pkt_probe *pkt_seq_create_template(struct pkt_seq_info *info)
 
 int pkt_seq_get_idx(struct rte_mbuf *pkt, uint32_t *idx)
 {
+	struct ether_hdr *eth_hdr = NULL;
 	struct ipv4_hdr *ip_hdr = NULL;
 	struct pkt_probe *probe = NULL;
 
-	if (RTE_ETH_IS_IPV4_HDR(pkt->packet_type) == 0)
+	eth_hdr = rte_pktmbuf_mtod(pkt, struct ether_hdr *);
+
+//	LOG_INFO("PKT len %u", pkt->data_len);
+
+	if (eth_hdr->ether_type != rte_cpu_to_be_16(ETHER_TYPE_IPv4)) {
+//		LOG_INFO("Not IPv4");
 		return -1;
+	}
 
 	ip_hdr = rte_pktmbuf_mtod_offset(pkt, struct ipv4_hdr *,
 					sizeof(struct ether_hdr));
-	if (ip_hdr->next_proto_id != IPPROTO_UDP)
+	if (ip_hdr->next_proto_id != IPPROTO_UDP) {
+//		LOG_INFO("Not UDP");
 		return -1;
+	}
 
 	probe = rte_pktmbuf_mtod(pkt, struct pkt_probe *);
-	if (probe->probe_magic != PKT_PROBE_MAGIC)
+	if (probe->probe_magic != PKT_PROBE_MAGIC) {
+//		LOG_INFO("Wrong magic %u %u", PKT_PROBE_MAGIC, probe->probe_magic);
 		return -1;
+	}
 
 	*idx = probe->probe_idx;
 	return 0;

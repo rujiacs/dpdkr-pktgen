@@ -2,23 +2,25 @@
 #define _PKTGEN_CONTROL_H_
 
 enum {
-	STOP_TYPE_TX = 0,
-	STOP_TYPE_RX,
-	STOP_TYPE_RXTX
+	STATE_INITED = 0,
+	STATE_UNINIT,
+	STATE_STOPPED,
+	STATE_ERROR
+};
+
+enum {
+	WORKER_STAT = 0,
+	WORKER_RX = 1,
+	WORKER_TX = 2,
+	WORKER_MAX = 3
 };
 
 bool ctl_is_stop(void);
 
 void ctl_signal_handler(int signo);
 
-bool ctl_is_stat_stop(void);
+unsigned ctl_get_state(unsigned worker);
 
-bool ctl_is_stat_inited(void);
-
-void ctl_stat_inited(void);
-
-void ctl_rxtx_inited(void);
-
-void ctl_rxtx_stopped(int type);
+void ctl_set_state(unsigned worker, unsigned state);
 
 #endif /* _PKTGEN_CONTROL_H_ */
