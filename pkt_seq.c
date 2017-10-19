@@ -102,6 +102,7 @@ struct pkt_probe *pkt_seq_create_template(struct pkt_seq_info *info)
 	/* Setup probe info */
 	pkt->probe_idx = 0;
 	pkt->probe_magic = PKT_PROBE_MAGIC;
+	pkt->send_cycle = 0;
 	return pkt;
 }
 

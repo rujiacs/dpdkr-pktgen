@@ -45,7 +45,6 @@ static int ring_portid;
 static struct rte_mempool *mp = NULL;
 
 static struct pkt_seq_info pkt_seq;
-static uint32_t max_idx = 0;
 
 static const char *__get_rxq_name(unsigned int id)
 {
@@ -153,7 +152,7 @@ static int __lcore_main(__attribute__((__unused__))void *arg)
 	param = &lcore_param[lcoreid];
 
 	if (param->is_stat) {
-		stat_thread_run(&max_idx);
+		stat_thread_run();
 	} else if (param->is_rx && param->is_tx) {
 		rxtx_thread_run_rxtx(sender_id, receiver_id, mp, &pkt_seq);
 	} else if (param->is_rx) {
@@ -297,9 +296,8 @@ int main(int argc, char *argv[])
 
 	is_create_stat = __set_lcore();
 
-	max_idx = rxtx_get_pkts_per_second(pkt_seq.pkt_len) * PROBE_TIMEOUT;
 	if (is_create_stat) {
-		if (pthread_create(&tid, NULL, (void *)stat_thread_run, &max_idx)) {
+		if (pthread_create(&tid, NULL, (void *)stat_thread_run, NULL)) {
 			rte_exit(EXIT_FAILURE, "Cannot create statistics thread\n");
 		}
 	}

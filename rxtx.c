@@ -14,8 +14,8 @@
 #include "pkt_seq.h"
 
 /* Rate control */
-/* - default tx rate: 100kbps */
-#define TX_RATE_DEF 102400
+/* - default tx rate: 10kbps */
+#define TX_RATE_DEF 10240
 /* - minimum cycles of TX a packet */
 static uint64_t cycle_per_pkt = 0;
 /* - TX speed in unit of bps */
@@ -99,7 +99,6 @@ static inline void __wait_for_time(uint64_t next_cyc)
 
 /*************************** TX ***************************/
 static uint32_t tx_seq_iter = 0;
-static struct rte_mbuf *next_pkt = NULL;
 static struct pkt_probe *probe_pkt = NULL;
 static unsigned int probe_pkt_len = 60;
 
@@ -116,17 +115,16 @@ static inline bool __copy_buf_to_pkt(void *buf, unsigned len,
 	return false;
 }
 
-static void __prepare_probe_mbuf(struct rte_mempool *mp)
+static void __prepare_probe_mbuf(struct rte_mbuf **buf,
+				struct rte_mempool *mp)
 {
 	struct rte_mbuf *pkt = NULL;
 	uint32_t crc = 0;
 
-	if (next_pkt != NULL)
-		return;
-
 	pkt = rte_mbuf_raw_alloc(mp);
 	if (pkt == NULL) {
 		LOG_ERROR("No available mbuf in mempool");
+		*buf = NULL;
 		return;
 	}
 
@@ -137,6 +135,7 @@ static void __prepare_probe_mbuf(struct rte_mempool *mp)
 
 	/* construct probe packet */
 	probe_pkt->probe_idx = tx_seq_iter;
+	probe_pkt->send_cycle = rte_get_tsc_cycles();
 	if (!__copy_buf_to_pkt(probe_pkt, sizeof(struct pkt_probe),
 							pkt, 0)) {
 		LOG_ERROR("Failed to copy probe packet into mbuf");
@@ -165,13 +164,12 @@ static void __prepare_probe_mbuf(struct rte_mempool *mp)
 	pkt->vlan_tci_outer = 0;
 	pkt->l2_len = sizeof(struct ether_hdr);
 	pkt->l3_len = sizeof(struct ipv4_hdr);
-
-	next_pkt = pkt;
+	*buf = pkt;
 	return;
 
 close_free_mbuf:
 	rte_pktmbuf_free(pkt);
-	next_pkt = NULL;
+	*buf = NULL;
 	return;
 }
 
@@ -180,6 +178,7 @@ static int __process_tx(int portid, struct rte_mempool *mp,
 {
 	uint16_t nb_tx = 0;
 	uint64_t start_cyc = 0;
+	struct rte_mbuf *pkt = NULL;
 
 	if (probe_pkt == NULL) {
 		probe_pkt = pkt_seq_create_template(seq);
@@ -190,18 +189,19 @@ static int __process_tx(int portid, struct rte_mempool *mp,
 		probe_pkt_len = seq->pkt_len;
 	}
 
-	__prepare_probe_mbuf(mp);
-
-	if (next_pkt == NULL)
-		return -EAGAIN;
-
 	/* check if send now */
 	start_cyc = rte_get_tsc_cycles();
 	if (!is_sleep && start_cyc < next_tx_cycles)
 		return 0;
 
+	/* construct mbuf for probe packet */
+	__prepare_probe_mbuf(&pkt, mp);
+
+	if (pkt == NULL)
+		return -EAGAIN;
+
 	/* send probe packet */
-	nb_tx = rte_eth_tx_burst(portid, 0, &next_pkt, 1);
+	nb_tx = rte_eth_tx_burst(portid, 0, &pkt, 1);
 	if (nb_tx < 1) {
 		LOG_ERROR("Failed to send probe packet %u", probe_pkt->probe_idx);
 		return -EAGAIN;
@@ -210,19 +210,11 @@ static int __process_tx(int portid, struct rte_mempool *mp,
 
 	/* update TX statistics */
 	stat_update_tx_probe(probe_pkt->probe_idx,
-					next_pkt->pkt_len, start_cyc);
-	LOG_DEBUG("TX packet %u on %lu", tx_seq_iter, start_cyc);
+					pkt->pkt_len, probe_pkt->send_cycle);
+	LOG_DEBUG("TX packet %u on %lu", tx_seq_iter, probe_pkt->send_cycle);
 
 	/* update tx seq state */
-	tx_seq_iter = stat_get_free_idx();
-	next_pkt = NULL;
-	if (tx_seq_iter == UINT_MAX) {
-		LOG_INFO("No available free probe pakcet");
-		return -ERANGE;
-	}
-
-	/* prepare for next TX */
-	__prepare_probe_mbuf(mp);
+	tx_seq_iter++;
 
 	/* calculate the next time to TX (and sleep) */
 	next_tx_cycles = __get_tx_next_cycles(start_cyc);
@@ -324,7 +316,7 @@ void rxtx_thread_run_tx(int portid, struct rte_mempool *mp,
 	LOG_INFO("tx running on lcore %u", rte_lcore_id());
 
 	__set_cycles_per_pkt(seq->pkt_len);
-	tx_seq_iter = stat_get_free_idx();
+	tx_seq_iter = 0;
 
 	ctl_set_state(WORKER_TX, STATE_INITED);
 
@@ -346,11 +338,6 @@ void rxtx_thread_run_tx(int portid, struct rte_mempool *mp,
 			tx_retry = 0;
 		}
 	}
-
-	if (next_pkt != NULL)
-		rte_pktmbuf_free(next_pkt);
-
-	ctl_set_state(WORKER_TX, STATE_STOPPED);
 }
 
 void rxtx_thread_run_rxtx(int sender, int recv, struct rte_mempool *mp,
@@ -378,7 +365,7 @@ void rxtx_thread_run_rxtx(int sender, int recv, struct rte_mempool *mp,
 	}
 
 	__set_cycles_per_pkt(seq->pkt_len);
-	tx_seq_iter = stat_get_free_idx();
+	tx_seq_iter = 0;
 
 	ctl_set_state(WORKER_TX, STATE_INITED);
 	ctl_set_state(WORKER_RX, STATE_INITED);
@@ -414,9 +401,6 @@ void rxtx_thread_run_rxtx(int sender, int recv, struct rte_mempool *mp,
 		if (is_tx_err && is_rx_err)
 			break;
 	}
-
-	if (next_pkt != NULL)
-		rte_pktmbuf_free(next_pkt);
 
 	ctl_set_state(WORKER_TX, STATE_STOPPED);
 	ctl_set_state(WORKER_RX, STATE_STOPPED);

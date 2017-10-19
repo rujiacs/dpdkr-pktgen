@@ -11,28 +11,16 @@ struct stat_info {
 };
 
 enum {
-	PROBE_STATE_FREE = 0,
-	PROBE_STATE_WAIT,
-	PROBE_STATE_SEND,
-	PROBE_STATE_RECV
+	RECORD_RX = 0,
+	RECORD_TX
 };
-
-struct probe_info {
-	uint32_t idx;
-	uint8_t state;
-	uint64_t send_cyc;
-	uint64_t recv_cyc;
-};
-
-/* in unit of second */
-#define PROBE_TIMEOUT	2
 
 #define STAT_PERIOD_USEC 200000
 #define STAT_PRINT_USEC	1000000
 #define STAT_PERIOD_MULTI (1000000 / STAT_PRINT_USEC)
 #define STAT_PRINT_INTERVAL (STAT_PRINT_USEC / STAT_PERIOD_USEC - 1)
 
-void stat_thread_run(uint32_t *max_ptr);
+void stat_thread_run(void);
 
 void stat_update_rx(uint64_t bytes);
 
@@ -40,8 +28,8 @@ void stat_update_rx_probe(uint32_t idx, uint64_t bytes, uint64_t cycle);
 
 void stat_update_tx_probe(uint32_t idx, uint64_t bytes, uint64_t cycle);
 
-uint32_t stat_get_free_idx(void);
+//uint32_t stat_get_free_idx(void);
 
-void stat_set_free(uint32_t idx);
+//void stat_set_free(uint32_t idx);
 
 #endif /* _PKTGEN_STAT_H_ */

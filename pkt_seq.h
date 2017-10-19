@@ -34,6 +34,7 @@ struct pkt_probe {
 	struct udp_hdr udp_hdr;
 	uint32_t probe_idx;
 	uint32_t probe_magic;
+	uint64_t send_cycle;
 //	uint8_t pad[10];
 };
 
