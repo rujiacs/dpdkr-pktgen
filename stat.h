@@ -28,7 +28,9 @@ struct probe_info {
 #define PROBE_TIMEOUT	2
 
 #define STAT_PERIOD_USEC 200000
-#define STAT_PERIOD_MULTI 5
+#define STAT_PRINT_USEC	1000000
+#define STAT_PERIOD_MULTI (1000000 / STAT_PRINT_USEC)
+#define STAT_PRINT_INTERVAL (STAT_PRINT_USEC / STAT_PERIOD_USEC - 1)
 
 void stat_thread_run(uint32_t *max_ptr);
 

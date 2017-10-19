@@ -26,7 +26,7 @@ void pkt_seq_init(struct pkt_seq_info *info)
 	info->dst_port = PKT_SEQ_PORT_DST;
 
 	info->pkt_len = PKT_SEQ_PKT_LEN;
-	info->seq_cnt = PKT_SEQ_CNT;
+//	info->seq_cnt = PKT_SEQ_CNT;
 }
 
 static void __setup_udp_ip_hdr(struct udp_hdr *udp,

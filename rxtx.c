@@ -60,6 +60,11 @@ void rxtx_set_rate(const char *rate_str)
 	}
 }
 
+uint32_t rxtx_get_pkts_per_second(uint16_t pkt_len)
+{
+	return tx_rate / (pkt_seq_wire_size(pkt_len) * 8);
+}
+
 #define PPS_MIN 4
 
 static void __set_cycles_per_pkt(uint16_t pkt_len)
@@ -201,17 +206,18 @@ static int __process_tx(int portid, struct rte_mempool *mp,
 		LOG_ERROR("Failed to send probe packet %u", probe_pkt->probe_idx);
 		return -EAGAIN;
 	}
-	LOG_INFO("TX packet %u on %lu", tx_seq_iter, start_cyc);
+//	LOG_INFO("TX packet %u on %lu", tx_seq_iter, start_cyc);
 
 	/* update TX statistics */
 	stat_update_tx_probe(probe_pkt->probe_idx,
 					next_pkt->pkt_len, start_cyc);
+	LOG_DEBUG("TX packet %u on %lu", tx_seq_iter, start_cyc);
 
 	/* update tx seq state */
 	tx_seq_iter = stat_get_free_idx();
 	next_pkt = NULL;
-	if (tx_seq_iter >= seq->seq_cnt) {
-		LOG_INFO("Finished TX all of %u packets", seq->seq_cnt);
+	if (tx_seq_iter == UINT_MAX) {
+		LOG_INFO("No available free probe pakcet");
 		return -ERANGE;
 	}
 
@@ -237,11 +243,12 @@ static void __rx_stat(struct rte_mbuf *pkt, uint64_t recv_cyc)
 //	int ret = 0;
 
 	if (pkt_seq_get_idx(pkt, &probe_idx) < 0) {
-		LOG_INFO("RX packet");
+		LOG_DEBUG("RX packet");
 		stat_update_rx(pkt->data_len);
 	} else {
+		LOG_DEBUG("RX packet %u", probe_idx);
 		stat_update_rx_probe(probe_idx, pkt->data_len, recv_cyc);
-		LOG_INFO("RX packet %u, len %u, recv_cyc %lu",
+		LOG_DEBUG("RX packet %u, len %u, recv_cyc %lu",
 						probe_idx, pkt->data_len,
 						(unsigned long)recv_cyc);
 	}

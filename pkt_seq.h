@@ -22,7 +22,7 @@ struct pkt_seq_info {
 	uint16_t dst_port;
 
 	uint16_t pkt_len;
-	uint16_t seq_cnt;
+//	uint16_t seq_cnt;
 };
 
 #define PKT_PROBE_MAGIC 0x12345678
@@ -50,7 +50,7 @@ struct pkt_probe {
 #define PKT_SEQ_PORT_SRC 1024
 #define PKT_SEQ_PORT_DST 1024
 #define PKT_SEQ_PKT_LEN 60
-#define PKT_SEQ_CNT 10
+//#define PKT_SEQ_CNT 10
 
 void pkt_seq_init(struct pkt_seq_info *info);
 

@@ -297,7 +297,7 @@ int main(int argc, char *argv[])
 
 	is_create_stat = __set_lcore();
 
-	max_idx = pkt_seq.seq_cnt * PROBE_TIMEOUT;
+	max_idx = rxtx_get_pkts_per_second(pkt_seq.pkt_len) * PROBE_TIMEOUT;
 	if (is_create_stat) {
 		if (pthread_create(&tid, NULL, (void *)stat_thread_run, &max_idx)) {
 			rte_exit(EXIT_FAILURE, "Cannot create statistics thread\n");

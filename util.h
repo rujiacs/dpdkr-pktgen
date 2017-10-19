@@ -18,6 +18,8 @@
 #include <sys/syscall.h>
 #include <sys/resource.h>
 
+//#define DEBUG_PRINT
+
 #define LOG_ERROR(format, ...) \
 		fprintf(stderr, "[ERROR] %s %d: " format "\n", \
 						__FILE__, __LINE__, ##__VA_ARGS__);
@@ -25,6 +27,14 @@
 #define LOG_INFO(format, ...) \
 		fprintf(stdout, "[INFO] %s %d: " format "\n", \
 						__FILE__, __LINE__, ##__VA_ARGS__);
+
+#ifdef DEBUG_PRINT
+#define LOG_DEBUG(format, ...) \
+		fprintf(stderr, "[DEBUG] %s %d: " format "\n", \
+						__FILE__, __LINE__, ##__VA_ARGS__);
+#else
+#define LOG_DEBUG(format, ...)
+#endif
 
 #define PAGE_SIZE 4096
 

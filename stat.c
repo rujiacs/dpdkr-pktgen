@@ -85,6 +85,7 @@ uint32_t stat_get_free_idx(void)
 	}
 
 	free_info->state = PROBE_STATE_WAIT;
+	LOG_DEBUG("Set %u state %u", free_info->idx, free_info->state);
 	return free_info->idx;
 }
 
@@ -100,6 +101,7 @@ void stat_set_free(uint32_t idx)
 	info = &probe_stat[idx];
 	info->send_cyc = info->recv_cyc = 0;
 	info->state = PROBE_STATE_FREE;
+	LOG_DEBUG("Set %u state %u", info->idx, info->state);
 	rte_ring_enqueue(free_idx, info);
 }
 
@@ -126,7 +128,8 @@ void stat_update_rx_probe(uint32_t idx, uint64_t bytes, uint64_t cycle)
 	info = &probe_stat[idx];
 
 	if (info->state != PROBE_STATE_SEND) {
-		LOG_ERROR("Wrong state %u", (unsigned)info->state);
+		LOG_ERROR("Wrong state %u for %u", (unsigned)info->state,
+						info->idx);
 
 		if (info->state != PROBE_STATE_FREE)
 			stat_set_free(idx);
@@ -135,6 +138,7 @@ void stat_update_rx_probe(uint32_t idx, uint64_t bytes, uint64_t cycle)
 
 	info->recv_cyc = cycle;
 	info->state = PROBE_STATE_RECV;
+	LOG_DEBUG("Set %u state %u", info->idx, info->state);
 //	LOG_INFO("RX probe packet %u at %lu", idx, (unsigned long)cycle);
 	__update_stat(&ring_stat[STAT_RX_IDX], bytes);
 }
@@ -160,6 +164,7 @@ void stat_update_tx_probe(uint32_t idx, uint64_t bytes, uint64_t cycle)
 
 	info->send_cyc = cycle;
 	info->state = PROBE_STATE_SEND;
+	LOG_DEBUG("Set %u state %u", info->idx, info->state);
 	__update_stat(&ring_stat[STAT_TX_IDX], bytes);
 }
 
@@ -175,7 +180,9 @@ static void __check_probe_timeout(uint64_t cur_cycle)
 		info = &probe_stat[i];
 
 		if (info->state == PROBE_STATE_SEND) {
-			if (info->send_cyc + timeout >= cur_cycle) {
+			if (cur_cycle - info->send_cyc >= timeout) {
+				LOG_DEBUG("Packet %u timeout, send at %lu, cur %lu, timeout %lu",
+								info->idx, info->send_cyc, cur_cycle, timeout);
 				/* recv_cycle(timeout) idx send_cycle latency(0)*/
 				fprintf(fout, "%lu,%u,%lu,0\n",
 								(unsigned long)cur_cycle, i,
@@ -247,6 +254,7 @@ void stat_thread_run(uint32_t *max_ptr)
 {
 	uint64_t start_cyc = 0, end_cyc = 0;
 	uint32_t max_idx = *max_ptr;
+	int count = 0;
 
 	/* init */
 	memset(ring_stat, 0, sizeof(struct stat_info) * STAT_IDX_MAX);
@@ -266,9 +274,14 @@ void stat_thread_run(uint32_t *max_ptr)
 	while (!__is_stat_stop()) {
 		// TODO
 		usleep(STAT_PERIOD_USEC);
-		__process_stat(&ring_stat[STAT_RX_IDX], "RX");
-		__process_stat(&ring_stat[STAT_TX_IDX], "TX");
 		__check_probe_timeout(rte_get_tsc_cycles());
+
+		if (count == STAT_PRINT_INTERVAL) {
+			__process_stat(&ring_stat[STAT_RX_IDX], "RX");
+			__process_stat(&ring_stat[STAT_TX_IDX], "TX");
+			count = 0;
+		} else
+			count++;
 	}
 
 	end_cyc = rte_get_tsc_cycles();
