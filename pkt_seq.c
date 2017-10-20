@@ -22,8 +22,8 @@ void pkt_seq_init(struct pkt_seq_info *info)
 	info->src_ip = PKT_SEQ_IP_SRC;
 	info->dst_ip = PKT_SEQ_IP_DST;
 
-	info->src_port = PKT_SEQ_PORT_SRC;
-	info->dst_port = PKT_SEQ_PORT_DST;
+	info->src_port = PKT_SEQ_PROBE_PORT_SRC;
+	info->dst_port = PKT_SEQ_PROBE_PORT_DST;
 
 	info->pkt_len = PKT_SEQ_PKT_LEN;
 //	info->seq_cnt = PKT_SEQ_CNT;
@@ -75,9 +75,14 @@ static void __setup_udp_ip_hdr(struct udp_hdr *udp,
 	ip->hdr_checksum = (uint16_t)ip_cksum;
 }
 
-struct pkt_probe *pkt_seq_create_template(struct pkt_seq_info *info)
+struct pkt_probe *pkt_seq_create_probe(struct pkt_seq_info *info)
 {
 	struct pkt_probe *pkt = NULL;
+
+	if (info->proto != IPPROTO_UDP) {
+		LOG_ERROR("Wrong proto %u for probe packet", info->proto);
+		return NULL;
+	}
 
 	pkt = rte_zmalloc("pktgen: struct pkt_probe",
 						sizeof(struct pkt_probe), 0);
@@ -86,7 +91,7 @@ struct pkt_probe *pkt_seq_create_template(struct pkt_seq_info *info)
 		return NULL;
 	}
 
-	LOG_INFO("eth_hdr %lu, ip_hdr %lu, udp_hdr %lu, idx %lu, magic %lu, pkt_len %lu",
+	LOG_DEBUG("eth_hdr %lu, ip_hdr %lu, udp_hdr %lu, idx %lu, magic %lu, pkt_len %lu",
 					sizeof(pkt->eth_hdr), sizeof(pkt->ip_hdr),
 					sizeof(pkt->udp_hdr), sizeof(pkt->probe_idx),
 					sizeof(pkt->probe_idx), sizeof(struct pkt_probe));

@@ -107,7 +107,7 @@ static int __process_tx(int portid, struct rte_mempool *mp,
 	struct rte_mbuf *pkt = NULL;
 
 	if (probe_pkt == NULL) {
-		probe_pkt = pkt_seq_create_template(seq);
+		probe_pkt = pkt_seq_create_probe(seq);
 		if (probe_pkt == NULL) {
 			LOG_ERROR("Failed to create template of probe pkt");
 			return -ENOMEM;
