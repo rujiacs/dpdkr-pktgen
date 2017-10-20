@@ -70,8 +70,8 @@ static inline unsigned long long rdtsc(void)
 					(((unsigned long long)hi) << 32));
 }
 
-static inline bool str_to_uint(
-				const char *s, int base, unsigned int *u)
+static inline bool str_to_int(
+				const char *s, int base, int *u)
 {
 	long val = 0;
 	char *tail = NULL;
@@ -83,7 +83,7 @@ static inline bool str_to_uint(
 		return false;
 	}
 
-	if (val < 0 || val > UINT_MAX) {
+	if (val > INT_MAX) {
 		*u = 0;
 		errno = ERANGE;
 		return false;

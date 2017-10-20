@@ -12,90 +12,16 @@
 #include "rxtx.h"
 #include "stat.h"
 #include "pkt_seq.h"
+#include "rate.h"
 
 /* Rate control */
 /* - default tx rate: 10kbps */
-#define TX_RATE_DEF 10240
-/* - minimum cycles of TX a packet */
-static uint64_t cycle_per_pkt = 0;
-/* - TX speed in unit of bps */
-static uint64_t tx_rate = TX_RATE_DEF;
-/* - Next time to TX a packet */
-static uint64_t next_tx_cycles = 0;
-/* - Cycles per second */
-static uint64_t cycle_per_usec = 0;
-
-/* Format: e.g 1000k => 1000 kbps, 2m => 2 mbps,
- * 			   128 => 128 bps
- */
-void rxtx_set_rate(const char *rate_str)
-{
-	long val = 0;
-	char *unit = NULL;
-
-	val = strtol(rate_str, &unit, 10);
-	if (errno == EINVAL || errno == ERANGE
-					|| unit == rate_str) {
-		LOG_ERROR("Failed to parse TX rate %s", rate_str);
-		return;
-	}
-
-	if (val < 0) {
-		LOG_ERROR("Wrong rate value %ld", val);
-		return;
-	}
-
-	switch(*unit) {
-		case 'k':	case 'K':
-			tx_rate = val << 10;
-			break;
-		case 'm':	case 'M':
-			tx_rate = val << 20;
-			break;
-		case 'g':	case 'G':
-			tx_rate = val << 40;
-			break;
-		default:
-			tx_rate = val;
-	}
-}
-
-uint32_t rxtx_get_pkts_per_second(uint16_t pkt_len)
-{
-	return tx_rate / (pkt_seq_wire_size(pkt_len) * 8);
-}
-
-#define PPS_MIN 4
-
-static void __set_cycles_per_pkt(uint16_t pkt_len)
-{
-	uint64_t pps = 0, hz = 0;
-
-	hz = rte_get_tsc_hz();
-	cycle_per_usec = hz / 1000000;
-	pps = tx_rate / (pkt_seq_wire_size(pkt_len) * 8);
-	cycle_per_pkt = (pps > 0) ? (hz / pps) : (hz / PPS_MIN);
-	LOG_INFO("Cycles per packet %lu",
-					(unsigned long)cycle_per_pkt);
-}
-
-static inline uint64_t __get_tx_next_cycles(uint64_t start)
-{
-	return start + cycle_per_pkt;
-}
-
-static inline void __wait_for_time(uint64_t next_cyc)
-{
-	unsigned long time = 0;
-	uint64_t cur = 0;
-
-	cur = rte_get_tsc_cycles();
-	if (cur + cycle_per_usec >= next_cyc)
-		return;
-
-	time = (next_cyc - cur) / cycle_per_usec;
-	usleep(time);
-}
+#define TX_RATE_DEF "10k"
+struct rate_ctl tx_rate = {
+	.rate_bps = 0,
+	.cycle_per_byte = 0,
+	.next_tx_cycle = 0,
+}; 
 
 /*************************** TX ***************************/
 static uint32_t tx_seq_iter = 0;
@@ -191,7 +117,7 @@ static int __process_tx(int portid, struct rte_mempool *mp,
 
 	/* check if send now */
 	start_cyc = rte_get_tsc_cycles();
-	if (!is_sleep && start_cyc < next_tx_cycles)
+	if (!is_sleep && start_cyc < tx_rate.next_tx_cycle)
 		return 0;
 
 	/* construct mbuf for probe packet */
@@ -217,9 +143,9 @@ static int __process_tx(int portid, struct rte_mempool *mp,
 	tx_seq_iter++;
 
 	/* calculate the next time to TX (and sleep) */
-	next_tx_cycles = __get_tx_next_cycles(start_cyc);
+	rate_set_next_cycle(&tx_rate, start_cyc, pkt->pkt_len);
 	if (is_sleep) {
-		__wait_for_time(next_tx_cycles);
+		rate_wait_for_time(&tx_rate);
 	}
 
 	return 0;
@@ -261,6 +187,14 @@ static int __process_rx(int portid)
 		rte_pktmbuf_free(rx_buf[i]);
 	}
 	return 0;
+}
+
+void rxtx_set_rate(const char *rate_str)
+{
+	if (tx_rate.rate_bps > 0)
+		return;
+
+	rate_set_rate(rate_str, &tx_rate);
 }
 
 void rxtx_thread_run_rx(int portid)
@@ -313,9 +247,11 @@ void rxtx_thread_run_tx(int portid, struct rte_mempool *mp,
 		ctl_set_state(WORKER_TX, STATE_ERROR);
 		return;
 	}
+
+	rxtx_set_rate(TX_RATE_DEF);
+
 	LOG_INFO("tx running on lcore %u", rte_lcore_id());
 
-	__set_cycles_per_pkt(seq->pkt_len);
 	tx_seq_iter = 0;
 
 	ctl_set_state(WORKER_TX, STATE_INITED);
@@ -364,7 +300,7 @@ void rxtx_thread_run_rxtx(int sender, int recv, struct rte_mempool *mp,
 		return;
 	}
 
-	__set_cycles_per_pkt(seq->pkt_len);
+	rxtx_set_rate(TX_RATE_DEF);
 	tx_seq_iter = 0;
 
 	ctl_set_state(WORKER_TX, STATE_INITED);

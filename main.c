@@ -20,8 +20,13 @@
 #define CLIENT_MP_NAME_PREFIX	"ovs_mp_2030_0"
 #define CLIENT_MP_PREFIX_LEN 13
 
-static unsigned int sender_id = -1;
-static unsigned int receiver_id = -1;
+static int sender_id = -1;
+static int receiver_id = -1;
+//static int portid = -1;
+
+static struct rte_mempool *mp = NULL;
+static struct pkt_seq_info pkt_seq;
+
 
 struct lcore_param {
 	bool is_rx;
@@ -38,13 +43,6 @@ static struct lcore_param lcore_param[RTE_MAX_LCORE] = {
 		.is_stat = false,
 	},
 };
-
-//static struct rte_ring *rx_ring;
-//static struct rte_ring *tx_ring;
-static int ring_portid;
-static struct rte_mempool *mp = NULL;
-
-static struct pkt_seq_info pkt_seq;
 
 static const char *__get_rxq_name(unsigned int id)
 {
@@ -64,7 +62,7 @@ static const char *__get_txq_name(unsigned int id)
 
 static int __parse_client_num(const char *client)
 {
-	if (str_to_uint(client, 10, &sender_id)) {
+	if (str_to_int(client, 10, &sender_id)) {
 		receiver_id = sender_id + 1;
 		return 0;
 	}
@@ -74,7 +72,7 @@ static int __parse_client_num(const char *client)
 static void __usage(const char *progname)
 {
 	LOG_INFO("Usage: %s [<EAL args> --proc-type=secondary] -- "
-					" -n <client id> -r <TX rate>",
+					" -c <client id> -r <TX rate>",
 					progname);
 }
 
@@ -86,9 +84,9 @@ static int __parse_options(int argc, char *argv[])
 
 	progname = argv[0];
 
-	while ((opt = getopt(argc, argvopt, "n:r:")) != -1) {
+	while ((opt = getopt(argc, argvopt, "c:r:")) != -1) {
 		switch(opt) {
-			case 'n':
+			case 'c':
 				if (__parse_client_num(optarg) != 0) {
 					LOG_ERROR("Wrong client id %s", optarg);
 					__usage(progname);
@@ -196,6 +194,7 @@ static int __get_ring_dev(unsigned int id)
 	struct rte_ring *tx_ring = NULL, *rx_ring = NULL;
 	struct rte_eth_conf conf;
 	int ret = 0;
+	int ring_portid;
 
 	rx_ring = rte_ring_lookup(__get_rxq_name(id));
 	if (rx_ring == NULL) {
