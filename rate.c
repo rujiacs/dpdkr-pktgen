@@ -8,15 +8,10 @@
 /* - Cycles per second */
 static uint64_t cycle_per_sec = 0;
 
-static inline void __get_cycle_per_sec(void)
-{
-	cycle_per_sec = rte_get_tsc_hz();
-}
-
 static uint64_t __get_cycle_per_byte(uint64_t tx_bps)
 {
 	if (cycle_per_sec == 0) {
-		__get_cycle_per_sec();
+		cycle_per_sec = rte_get_tsc_hz();
 	}
 
 	return (cycle_per_sec / (tx_bps / 8));
@@ -63,6 +58,8 @@ bool rate_set_rate(const char *rate_str,
 	rate->rate_bps = tx_rate;
 	rate->cycle_per_byte = __get_cycle_per_byte(tx_rate);
 	rate->next_tx_cycle = 0;
+	LOG_INFO("bps %lu, hz %lu, cycle_per_byte %lu", tx_rate,
+					cycle_per_sec, rate->cycle_per_byte);
 	return true;
 }
 
@@ -72,15 +69,15 @@ void rate_set_next_cycle(struct rate_ctl *rate,
 	rate->next_tx_cycle =  cur_cycle + rate->cycle_per_byte * pkt_len;
 }
 
-void rate_wait_for_time(struct rate_ctl *rate)
+void rate_wait_for_time(uint64_t next_cycle)
 {
 	unsigned long time = 0;
 	uint64_t cur = 0;
 
 	cur = rte_get_tsc_cycles();
-	if (cur >= rate->next_tx_cycle)
+	if (cur >= next_cycle)
 		return;
 
-	time = (rate->next_tx_cycle - cur) / (cycle_per_sec / USEC_PER_SEC);
+	time = (next_cycle - cur) / (cycle_per_sec / USEC_PER_SEC);
 	usleep(time);
 }

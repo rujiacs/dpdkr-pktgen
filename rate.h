@@ -15,6 +15,6 @@ bool rate_set_rate(const char *rate_str, struct rate_ctl *rate);
 void rate_set_next_cycle(struct rate_ctl *rate,
 				uint64_t cur_cycle, uint16_t pkt_len);
 
-void rate_wait_for_time(struct rate_ctl *rate);
+void rate_wait_for_time(uint64_t next_cycle);
 
 #endif

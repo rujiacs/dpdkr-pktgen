@@ -14,6 +14,7 @@
 #include "rxtx.h"
 #include "control.h"
 #include "pkt_seq.h"
+#include "measure.h"
 
 #define CLIENT_RXQ_NAME "dpdkr%u_tx"
 #define CLIENT_TXQ_NAME "dpdkr%u_rx"
@@ -141,6 +142,10 @@ static int __lcore_main(__attribute__((__unused__))void *arg)
 {
 	unsigned lcoreid;
 	struct lcore_param *param;
+	struct measure_param measure = {
+		.sender = sender_id,
+		.mp = mp,
+	};
 
 	lcoreid = rte_lcore_id();
 //	if (lcoreid >= LCORE_MAX)
@@ -150,7 +155,7 @@ static int __lcore_main(__attribute__((__unused__))void *arg)
 	param = &lcore_param[lcoreid];
 
 	if (param->is_stat) {
-		stat_thread_run();
+		measure_thread_run(&measure);
 	} else if (param->is_rx && param->is_tx) {
 		rxtx_thread_run_rxtx(sender_id, receiver_id, mp, &pkt_seq);
 	} else if (param->is_rx) {
@@ -257,6 +262,7 @@ int main(int argc, char *argv[])
 	int coreid = 0;
 	bool is_create_stat = false;
 	pthread_t tid;
+	struct measure_param param;
 
 	if ((retval = rte_eal_init(argc, argv)) < 0) {
 		LOG_ERROR("Failed to initialize dpdk eal");
@@ -295,8 +301,11 @@ int main(int argc, char *argv[])
 
 	is_create_stat = __set_lcore();
 
+	param.sender = sender_id;
+	param.mp = mp;
+
 	if (is_create_stat) {
-		if (pthread_create(&tid, NULL, (void *)stat_thread_run, NULL)) {
+		if (pthread_create(&tid, NULL, (void *)measure_thread_run, &param)) {
 			rte_exit(EXIT_FAILURE, "Cannot create statistics thread\n");
 		}
 	}

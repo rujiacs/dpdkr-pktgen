@@ -7,44 +7,14 @@
 #include <rte_ring.h>
 #include <rte_malloc.h>
 
-enum {
-	STAT_RX_IDX = 0,
-	STAT_TX_IDX,
-	STAT_IDX_MAX
-};
-
-struct probe_record {
-	uint32_t idx;
-	uint64_t cycles;
-};
-
-static struct stat_info ring_stat[STAT_IDX_MAX];
+static struct stat_info port_stat[STAT_IDX_MAX];
 
 static FILE *fout_rx = NULL;
 static FILE *fout_tx = NULL;
 
-static bool __stat_init(void)
-{
-	fout_rx = fopen("probe.rx", "w");
-	if (fout_rx == NULL) {
-		LOG_ERROR("Failed to open RX output file");
-		return false;
-	}
-
-	fout_tx = fopen("probe.tx", "w");
-	if (fout_tx == NULL) {
-		LOG_ERROR("Failed to open TX output file");
-		goto close_free_rx;
-	}
-
-	return true;
-
-close_free_rx:
-	fclose(fout_rx);
-	fout_rx = NULL;
-
-	return false;
-}
+static uint64_t cycle_per_sec = 0;
+static uint64_t next_dump_cycle = 0;
+static uint64_t dump_interval = 0;
 
 static void __update_stat(struct stat_info *stat, uint64_t byte)
 {
@@ -52,9 +22,9 @@ static void __update_stat(struct stat_info *stat, uint64_t byte)
 	stat->stat_pkts ++;
 }
 
-void stat_update_rx(uint64_t byte)
+void stat_update_rx(uint64_t bytes)
 {
-	__update_stat(&ring_stat[STAT_RX_IDX], byte);
+	__update_stat(&port_stat[STAT_IDX_RX], bytes);
 }
 
 void stat_update_rx_probe(uint32_t idx, uint64_t bytes, uint64_t cycle)
@@ -63,7 +33,12 @@ void stat_update_rx_probe(uint32_t idx, uint64_t bytes, uint64_t cycle)
 		fprintf(fout_rx, "%u,%u,%lu\n", idx, RECORD_RX, cycle);
 
 	LOG_DEBUG("RX probe packet %u at %lu", idx, (unsigned long)cycle);
-	__update_stat(&ring_stat[STAT_RX_IDX], bytes);
+	__update_stat(&port_stat[STAT_IDX_RX], bytes);
+}
+
+void stat_update_tx(uint64_t bytes)
+{
+	__update_stat(&port_stat[STAT_IDX_TX], bytes);
 }
 
 void stat_update_tx_probe(uint32_t idx, uint64_t bytes, uint64_t cycle)
@@ -71,14 +46,16 @@ void stat_update_tx_probe(uint32_t idx, uint64_t bytes, uint64_t cycle)
 	if (fout_tx != NULL)
 		fprintf(fout_tx, "%u,%u,%lu\n", idx, RECORD_TX, cycle);
 
-	__update_stat(&ring_stat[STAT_TX_IDX], bytes);
+	__update_stat(&port_stat[STAT_IDX_TX_PROBE], bytes);
 }
 
-static void __process_stat(struct stat_info *stat,
-				const char *prefix)
+static inline void __process_stat(struct stat_info *stat,
+//				double *bps, double *pps)
+				uint64_t cur_cycle, double *bps, double *pps)
 {
 	uint64_t bytes = 0, pkts = 0;
 	uint64_t last_b = 0, last_p = 0;
+	double sec = 0;
 
 	bytes = stat->stat_bytes;
 	pkts = stat->stat_pkts;
@@ -87,9 +64,12 @@ static void __process_stat(struct stat_info *stat,
 	stat->last_bytes = bytes;
 	stat->last_pkts = pkts;
 
-	LOG_INFO("%s %lu bps, %lu pps", prefix,
-				(unsigned long)((bytes - last_b) * STAT_PERIOD_MULTI * 8),
-				(unsigned long)((pkts - last_p) * STAT_PERIOD_MULTI));
+//	sec = STAT_PRINT_SEC;
+	sec = (double)(cur_cycle - stat->last_cycle) / cycle_per_sec;
+	stat->last_cycle = cur_cycle;
+
+	*bps = (bytes - last_b) * 8 / sec;
+	*pps = (pkts - last_p) / sec;
 }
 
 static void __summary_stat(uint64_t cycles)
@@ -97,11 +77,13 @@ static void __summary_stat(uint64_t cycles)
 	double sec = 0;
 	uint64_t rx_bytes, rx_pkts, tx_bytes, tx_pkts;
 
-	sec = (double)cycles / rte_get_tsc_hz();
-	rx_bytes = ring_stat[STAT_RX_IDX].stat_bytes;
-	rx_pkts = ring_stat[STAT_RX_IDX].stat_pkts;
-	tx_bytes = ring_stat[STAT_TX_IDX].stat_bytes;
-	tx_pkts = ring_stat[STAT_TX_IDX].stat_pkts;
+	sec = (double)cycles / cycle_per_sec;
+	rx_bytes = port_stat[STAT_IDX_RX].stat_bytes;
+	rx_pkts = port_stat[STAT_IDX_RX].stat_pkts;
+	tx_bytes = port_stat[STAT_IDX_TX].stat_bytes
+				+ port_stat[STAT_IDX_TX_PROBE].stat_bytes;
+	tx_pkts = port_stat[STAT_IDX_TX].stat_pkts
+				+ port_stat[STAT_IDX_TX_PROBE].stat_pkts;
 
 	LOG_INFO("Running %lf seconds.", sec);
 	LOG_INFO("\tRX %lu bytes (%lf bps), %lu packets (%lf pps)",
@@ -112,7 +94,47 @@ static void __summary_stat(uint64_t cycles)
 					tx_pkts, (tx_pkts / sec));
 }
 
-static bool __is_stat_stop(void)
+bool stat_init(void)
+{
+	uint64_t cycle;
+	int i = 0;
+
+	memset(port_stat, 0, sizeof(struct stat_info) * STAT_IDX_MAX);
+
+	fout_rx = fopen("probe.rx", "w");
+	if (fout_rx == NULL) {
+		LOG_ERROR("Failed to open RX output file");
+		goto close_set_error;
+	}
+
+	fout_tx = fopen("probe.tx", "w");
+	if (fout_tx == NULL) {
+		LOG_ERROR("Failed to open TX output file");
+		goto close_free_rx;
+	}
+
+	/* Initialize timer */
+	cycle_per_sec = rte_get_tsc_hz();
+	dump_interval = STAT_PRINT_SEC * cycle_per_sec;
+	cycle = rte_get_tsc_cycles();
+	for (i = 0; i < STAT_IDX_MAX; i++) {
+		port_stat[i].last_cycle = cycle;
+	}
+	next_dump_cycle = cycle + dump_interval;
+
+	ctl_set_state(WORKER_STAT, STATE_INITED);
+	return true;
+
+close_free_rx:
+	fclose(fout_rx);
+	fout_rx = NULL;
+
+close_set_error:
+	ctl_set_state(WORKER_STAT, STATE_ERROR);
+	return false;
+}
+
+bool stat_is_stop(void)
 {
 	unsigned int tx_state, rx_state;
 
@@ -125,40 +147,34 @@ static bool __is_stat_stop(void)
 	return true;
 }
 
-void stat_thread_run(void)
+uint64_t stat_processing(void)
 {
-	uint64_t start_cyc = 0, end_cyc = 0;
-	int count = 0;
+	uint64_t cur_cycle = rte_get_tsc_cycles();
+	double bps[STAT_IDX_MAX], pps[STAT_IDX_MAX];
+	int i = 0;
 
-	/* init */
-	memset(ring_stat, 0, sizeof(struct stat_info) * STAT_IDX_MAX);
-
-	if (__stat_init()) {
-		ctl_set_state(WORKER_STAT, STATE_INITED);
-		LOG_INFO("Statistics running on lcore %u",
-						rte_lcore_id());
-	} else {
-		LOG_ERROR("Failed to initialize stat");
-		ctl_set_state(WORKER_STAT, STATE_ERROR);
-		return;
+	if (cur_cycle < next_dump_cycle) {
+		return next_dump_cycle;
 	}
 
-	start_cyc = rte_get_tsc_cycles();
-
-	while (!__is_stat_stop()) {
-		// TODO
-		usleep(STAT_PERIOD_USEC);
-
-		if (count == STAT_PRINT_INTERVAL) {
-			__process_stat(&ring_stat[STAT_RX_IDX], "RX");
-			__process_stat(&ring_stat[STAT_TX_IDX], "TX");
-			count = 0;
-		} else
-			count++;
+	for (i = 0; i < STAT_IDX_MAX; i++) {
+		__process_stat(&port_stat[i], cur_cycle, &bps[i], &pps[i]);
+//		__process_stat(&port_stat[i], &bps[i], &pps[i]);
 	}
 
-	end_cyc = rte_get_tsc_cycles();
-	__summary_stat(end_cyc - start_cyc);
+	LOG_INFO("TX speed %lf bps, %lf pps",
+					bps[STAT_IDX_TX] + bps[STAT_IDX_TX_PROBE],
+					pps[STAT_IDX_TX] + pps[STAT_IDX_TX_PROBE]);
+	LOG_INFO("RX speed %lf bps, %lf pps",
+					bps[STAT_IDX_RX], pps[STAT_IDX_RX]);
+
+	next_dump_cycle = cur_cycle + dump_interval;
+	return next_dump_cycle;
+}
+
+void stat_finish(uint64_t start_cycle)
+{
+	__summary_stat(rte_get_tsc_cycles() - start_cycle);
 
 	if (fout_tx != NULL)
 		fclose(fout_tx);
