@@ -22,7 +22,6 @@ static uint32_t probe_iter = 0;
 static struct pkt_probe *probe_pkt = NULL;
 static int probe_pkt_len = PKT_SEQ_PROBE_PKT_LEN;
 
-
 static void __prepare_probe_mbuf(struct rte_mbuf **buf,
 				struct rte_mempool *mp)
 {
@@ -151,7 +150,7 @@ void measure_thread_run(struct measure_param *param)
 		/* TX */
 		if (!is_err) {
 			ret = __process_tx(sender, mp);
-			if (ret < 0) {
+			if (ret == -ENOMEM) {
 				LOG_ERROR("Probe packet TX error!");
 				is_err = true;
 			}

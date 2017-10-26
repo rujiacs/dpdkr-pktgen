@@ -23,10 +23,13 @@
 
 static int sender_id = -1;
 static int receiver_id = -1;
+
+static unsigned dev_type = 0;
+static unsigned tx_type = TX_TYPE_SINGLE;
+
 //static int portid = -1;
 
 static struct rte_mempool *mp = NULL;
-static struct pkt_seq_info pkt_seq;
 
 
 struct lcore_param {
@@ -72,9 +75,12 @@ static int __parse_client_num(const char *client)
 
 static void __usage(const char *progname)
 {
-	LOG_INFO("Usage: %s [<EAL args> --proc-type=secondary] -- "
-					" -c <client id> -r <TX rate>",
-					progname);
+	LOG_INFO("Usage: %s [<EAL args> --proc-type=secondary] -- ", progname);
+	LOG_INFO("\t\t-d <device type (eth for hardware NIC, dpdkr for dpdkr)>");
+	LOG_INFO("\t\t-p <portid (for eth dev) or clientid (for dpdkr)>");
+	LOG_INFO("\t\t-r <TX rate (default 0)>");
+	LOG_INFO("\t\t-o <output file prefix>");
+	LOG_INFO("\t\t-R Random pakcets");
 }
 
 static int __parse_options(int argc, char *argv[])
@@ -85,9 +91,21 @@ static int __parse_options(int argc, char *argv[])
 
 	progname = argv[0];
 
-	while ((opt = getopt(argc, argvopt, "c:r:")) != -1) {
+	while ((opt = getopt(argc, argvopt, "d:p:r:o:R")) != -1) {
 		switch(opt) {
-			case 'c':
+			case 'd':
+				if (strcmp(optarg, "eth") == 0) {
+					dev_type = DEV_TYPE_ETH;
+				} else if (strcmp(optarg, "dpdkr") == 0) {
+					dev_type = DEV_TYPE_DPDKR;
+				} else {
+					LOG_ERROR("Wrong device type %s", optarg);
+					__usage(progname);
+					return -1;
+				}
+				break;
+
+			case 'p':
 				if (__parse_client_num(optarg) != 0) {
 					LOG_ERROR("Wrong client id %s", optarg);
 					__usage(progname);
@@ -96,6 +114,12 @@ static int __parse_options(int argc, char *argv[])
 				break;
 			case 'r':
 				rxtx_set_rate(optarg);
+				break;
+			case 'o':
+				stat_set_output(optarg);
+				break;
+			case 'R':
+				tx_type = TX_TYPE_RANDOM;
 				break;
 			default:
 				__usage(progname);
@@ -157,11 +181,12 @@ static int __lcore_main(__attribute__((__unused__))void *arg)
 	if (param->is_stat) {
 		measure_thread_run(&measure);
 	} else if (param->is_rx && param->is_tx) {
-		rxtx_thread_run_rxtx(sender_id, receiver_id, mp, &pkt_seq);
+		rxtx_thread_run_rxtx(sender_id, receiver_id, mp,
+								tx_type, NULL, NULL);
 	} else if (param->is_rx) {
 		rxtx_thread_run_rx(receiver_id);
 	} else if (param->is_tx) {
-		rxtx_thread_run_tx(sender_id, mp, &pkt_seq);
+		rxtx_thread_run_tx(sender_id, mp, tx_type, NULL, NULL);
 	}
 
 	LOG_INFO("lcore %u finished.", lcoreid);
@@ -272,7 +297,7 @@ int main(int argc, char *argv[])
 	argc -= retval;
 	argv += retval;
 
-	pkt_seq_init(&pkt_seq);
+//	pkt_seq_init(&pkt_seq);
 
 	if (__parse_options(argc, argv) < 0) {
 		rte_exit(EXIT_FAILURE, "Invalid command-line arguments\n");

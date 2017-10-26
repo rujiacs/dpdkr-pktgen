@@ -9,12 +9,20 @@
 
 static struct stat_info port_stat[STAT_IDX_MAX];
 
+#define PREFIX_MAX 100
+
+static char output_prefix[PREFIX_MAX] = {'\0'};
 static FILE *fout_rx = NULL;
 static FILE *fout_tx = NULL;
 
 static uint64_t cycle_per_sec = 0;
 static uint64_t next_dump_cycle = 0;
 static uint64_t dump_interval = 0;
+
+void stat_set_output(const char *prefix)
+{
+	snprintf(output_prefix, PREFIX_MAX, "%s", prefix);
+}
 
 static void __update_stat(struct stat_info *stat, uint64_t byte)
 {
@@ -36,9 +44,10 @@ void stat_update_rx_probe(uint32_t idx, uint64_t bytes, uint64_t cycle)
 	__update_stat(&port_stat[STAT_IDX_RX], bytes);
 }
 
-void stat_update_tx(uint64_t bytes)
+void stat_update_tx(uint64_t bytes, unsigned int pkts)
 {
-	__update_stat(&port_stat[STAT_IDX_TX], bytes);
+	port_stat[STAT_IDX_TX].stat_bytes += bytes;
+	port_stat[STAT_IDX_TX].stat_pkts += pkts;
 }
 
 void stat_update_tx_probe(uint32_t idx, uint64_t bytes, uint64_t cycle)
@@ -68,8 +77,8 @@ static inline void __process_stat(struct stat_info *stat,
 	sec = (double)(cur_cycle - stat->last_cycle) / cycle_per_sec;
 	stat->last_cycle = cur_cycle;
 
-	*bps = (bytes - last_b) * 8 / sec;
-	*pps = (pkts - last_p) / sec;
+	*bps = (bytes - last_b) * 8 / (sec * 1024);
+	*pps = (pkts - last_p) / (sec * 1024);
 }
 
 static void __summary_stat(uint64_t cycles)
@@ -86,11 +95,11 @@ static void __summary_stat(uint64_t cycles)
 				+ port_stat[STAT_IDX_TX_PROBE].stat_pkts;
 
 	LOG_INFO("Running %lf seconds.", sec);
-	LOG_INFO("\tRX %lu bytes (%lf bps), %lu packets (%lf pps)",
-					rx_bytes, (rx_bytes * 8 / sec),
+	LOG_INFO("\tRX %lu bytes (%lf kbps), %lu packets (%lf pps)",
+					rx_bytes, (rx_bytes * 8 / (sec * 1024)),
 					rx_pkts, (rx_pkts / sec));
-	LOG_INFO("\tTX %lu bytes (%lf bps), %lu packets (%lf pps)",
-					tx_bytes, (tx_bytes * 8 / sec),
+	LOG_INFO("\tTX %lu bytes (%lf kbps), %lu packets (%lf pps)",
+					tx_bytes, (tx_bytes * 8 / (sec * 1024)),
 					tx_pkts, (tx_pkts / sec));
 }
 
@@ -98,16 +107,22 @@ bool stat_init(void)
 {
 	uint64_t cycle;
 	int i = 0;
+	char buf[PREFIX_MAX + 4] = {'\0'};
 
 	memset(port_stat, 0, sizeof(struct stat_info) * STAT_IDX_MAX);
 
-	fout_rx = fopen("probe.rx", "w");
+	if (strlen(output_prefix) <= 0)
+		sprintf(output_prefix, "probe");
+
+	sprintf(buf, "%s.rx", output_prefix);
+	fout_rx = fopen(buf, "w");
 	if (fout_rx == NULL) {
 		LOG_ERROR("Failed to open RX output file");
 		goto close_set_error;
 	}
 
-	fout_tx = fopen("probe.tx", "w");
+	sprintf(buf, "%s.tx", output_prefix);
+	fout_tx = fopen(buf, "w");
 	if (fout_tx == NULL) {
 		LOG_ERROR("Failed to open TX output file");
 		goto close_free_rx;
@@ -162,10 +177,10 @@ uint64_t stat_processing(void)
 //		__process_stat(&port_stat[i], &bps[i], &pps[i]);
 	}
 
-	LOG_INFO("TX speed %lf bps, %lf pps",
+	LOG_INFO("TX speed %lf kbps, %lf pps",
 					bps[STAT_IDX_TX] + bps[STAT_IDX_TX_PROBE],
 					pps[STAT_IDX_TX] + pps[STAT_IDX_TX_PROBE]);
-	LOG_INFO("RX speed %lf bps, %lf pps",
+	LOG_INFO("RX speed %lf kbps, %lf pps",
 					bps[STAT_IDX_RX], pps[STAT_IDX_RX]);
 
 	next_dump_cycle = cur_cycle + dump_interval;

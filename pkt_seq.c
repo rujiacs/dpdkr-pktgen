@@ -1,7 +1,9 @@
 #include "util.h"
 #include "pkt_seq.h"
 
+#include <rte_hash_crc.h>
 #include <rte_malloc.h>
+#include <rte_mbuf.h>
 
 #define IP_VERSION 0x40
 #define IP_HDRLEN 0x05
@@ -55,55 +57,105 @@ void pkt_seq_init(struct pkt_seq_info *info)
 //	info->seq_cnt = PKT_SEQ_CNT;
 }
 
-static void __setup_udp_ip_hdr(struct udp_hdr *udp,
-				struct ipv4_hdr *ip)
+static uint16_t __checksum_16(const void *data, uint32_t len)
 {
-	uint16_t *ptr16 = NULL;
-	uint32_t ip_cksum = 0;
+	uint32_t crc32 = 0;
 
-	/* Setup UDP header */
-	udp->src_port = rte_cpu_to_be_16(PKT_SEQ_PROBE_PORT_SRC);
-	udp->dst_port = rte_cpu_to_be_16(PKT_SEQ_PROBE_PORT_DST);
-	udp->dgram_len = rte_cpu_to_be_16(PKT_SEQ_PROBE_PKT_LEN
-										- sizeof(struct ether_hdr)
-										- sizeof(struct ipv4_hdr));
-	udp->dgram_cksum = 0;	/* No UDP checksum */
+	crc32 = rte_hash_crc(data, len, 0);
 
+	crc32 = (crc32 & 0xffff) + (crc32 >> 16);
+	crc32 = (crc32 & 0xffff) + (crc32 >> 16);
+
+	return ~((uint16_t)crc32);
+}
+
+static void __setup_ip_hdr(struct ipv4_hdr *ip)
+{
 	/* Setup IPv4 header */
 	ip->version_ihl = IP_VHL_DEF;
 	ip->type_of_service = 0;
 	ip->fragment_offset = 0;
 	ip->time_to_live = IP_TTL_DEF;
-	ip->next_proto_id = PKT_SEQ_PROBE_PROTO;
 	ip->packet_id = 0;
-	ip->total_length = rte_cpu_to_be_16(PKT_SEQ_PROBE_PKT_LEN
-										- sizeof(struct ether_hdr));
-	ip->src_addr = rte_cpu_to_be_32(PKT_SEQ_IP_SRC);
-	ip->dst_addr = rte_cpu_to_be_32(PKT_SEQ_IP_DST);
 
 	/* Compute IPv4 header checksum */
-	ptr16 = (unaligned_uint16_t*)ip;
-	ip_cksum = 0;
-	ip_cksum += ptr16[0]; ip_cksum += ptr16[1];
-	ip_cksum += ptr16[2]; ip_cksum += ptr16[3];
-	ip_cksum += ptr16[4];
-	ip_cksum += ptr16[6]; ip_cksum += ptr16[7];
-	ip_cksum += ptr16[8]; ip_cksum += ptr16[9];
+	ip->hdr_checksum = __checksum_16(ip, sizeof(struct ipv4_hdr));
+}
 
-	/* Reduce 32 bit checksum to 16 bits and complement it. */
-	ip_cksum = ((ip_cksum & 0xFFFF0000) >> 16) +
-		(ip_cksum & 0x0000FFFF);
-	if (ip_cksum > 65535)
-		ip_cksum -= 65535;
-	ip_cksum = (~ip_cksum) & 0x0000FFFF;
-	if (ip_cksum == 0)
-		ip_cksum = 0xFFFF;
-	ip->hdr_checksum = (uint16_t)ip_cksum;
+void pkt_seq_setup_tcpip(struct pkt_seq_info *info,
+				struct tcpip_hdr *tcpip)
+{
+	uint16_t tlen = 0;
+
+	memset(tcpip, 0, sizeof(struct tcpip_hdr));
+
+	/* Setup TCP header */
+	tcpip->tcp.src_port = rte_cpu_to_be_16(info->src_port);
+	tcpip->tcp.dst_port = rte_cpu_to_be_16(info->dst_port);
+	tcpip->tcp.sent_seq = rte_cpu_to_be_32(PKT_SEQ_TCP_SEQ);
+	tcpip->tcp.recv_ack = rte_cpu_to_be_32(PKT_SEQ_TCP_ACK);
+	tcpip->tcp.data_off = ((sizeof(struct tcp_hdr) / sizeof(uint32_t)) << 4);
+	tcpip->tcp.tcp_flags = PKT_SEQ_TCP_FLAGS;
+	tcpip->tcp.rx_win = rte_cpu_to_be_16(PKT_SEQ_TCP_WINDOW);
+	tcpip->tcp.tcp_urp = 0;
+
+	/* Setup part of IP header */
+	tcpip->ip.src_addr = rte_cpu_to_be_32(info->src_ip);
+	tcpip->ip.dst_addr = rte_cpu_to_be_32(info->dst_ip);
+	tcpip->ip.total_length = rte_cpu_to_be_16(info->pkt_len
+								- sizeof(struct ether_hdr)
+								- sizeof(struct ipv4_hdr));
+	tcpip->ip.next_proto_id = IPPROTO_TCP;
+
+	/* Calculate tcp checksum */
+	tlen = info->pkt_len - sizeof(struct ether_hdr);
+	tcpip->tcp.cksum = __checksum_16(tcpip, tlen);
+
+	/* Setup remaining part of ip header */
+	__setup_ip_hdr(&tcpip->ip);
+}
+
+void pkt_seq_setup_udpip(struct pkt_seq_info *info,
+				struct udpip_hdr *udpip)
+{
+	struct udp_hdr *udp = &udpip->udp;
+	struct ipv4_hdr *ip = &udpip->ip;
+
+	memset(udpip, 0, sizeof(struct udpip_hdr));
+
+	/* Setup UDP header */
+	udp->src_port = rte_cpu_to_be_16(info->src_port);
+	udp->dst_port = rte_cpu_to_be_16(info->dst_port);
+	udp->dgram_len = rte_cpu_to_be_16(info->pkt_len
+										- sizeof(struct ether_hdr)
+										- sizeof(struct ipv4_hdr));
+
+	/* Setup part of IPv4 header */
+	ip->packet_id = 0;
+	ip->next_proto_id = IPPROTO_UDP;
+	ip->total_length = rte_cpu_to_be_16(info->pkt_len
+										- sizeof(struct ether_hdr));
+	ip->src_addr = rte_cpu_to_be_32(info->src_ip);
+	ip->dst_addr = rte_cpu_to_be_32(info->dst_ip);
+
+	/* Calculate UDP checksum */
+	udp->dgram_cksum = 0;
+
+	/* Setup remaining part of ip header */
+	__setup_ip_hdr(ip);
 }
 
 struct pkt_probe *pkt_seq_create_probe(void)
 {
 	struct pkt_probe *pkt = NULL;
+	struct pkt_seq_info info = {
+		.src_ip = PKT_SEQ_IP_SRC,
+		.dst_ip = PKT_SEQ_IP_DST,
+		.proto = IPPROTO_UDP,
+		.src_port = PKT_SEQ_PROBE_PORT_SRC,
+		.dst_port = PKT_SEQ_PROBE_PORT_DST,
+		.pkt_len = PKT_SEQ_PROBE_PKT_LEN,
+	};
 
 	pkt = rte_zmalloc("pktgen: struct pkt_probe",
 						sizeof(struct pkt_probe), 0);
@@ -118,7 +170,7 @@ struct pkt_probe *pkt_seq_create_probe(void)
 					sizeof(pkt->probe_idx), sizeof(struct pkt_probe));
 
 	/* Setup UDP and IPv4 headers */
-	__setup_udp_ip_hdr(&pkt->udp_hdr, &pkt->ip_hdr);
+	pkt_seq_setup_udpip(&info, &pkt->udpip_hdr);
 
 	/* Setup Ethernet header */
 	ether_addr_copy(&mac_src, &pkt->eth_hdr.s_addr);
@@ -130,6 +182,61 @@ struct pkt_probe *pkt_seq_create_probe(void)
 	pkt->probe_magic = PKT_PROBE_MAGIC;
 	pkt->send_cycle = 0;
 	return pkt;
+}
+
+void pkt_seq_fill_mbuf(struct rte_mbuf *mbuf, struct pkt_seq_info *info)
+{
+	struct ether_hdr *eth_hdr;
+	uint8_t *payload = NULL;
+	unsigned len = 0;
+	uint32_t *crc = NULL;
+
+	if (info == NULL) {
+		LOG_ERROR("Wrong data to fill into mbuf");
+		return;
+	}
+
+	mbuf->pkt_len = info->pkt_len + ETH_CRC_LEN;
+	mbuf->data_len = info->pkt_len + ETH_CRC_LEN;
+
+	/* Setup payload */
+	if (info->proto == IPPROTO_TCP) {
+		len = info->pkt_len - sizeof(struct ether_hdr)
+							- sizeof(struct tcpip_hdr);
+	} else {
+		len = info->pkt_len - sizeof(struct ether_hdr)
+							- sizeof(struct udpip_hdr);
+	}
+	payload = rte_pktmbuf_mtod_offset(mbuf, uint8_t *,
+					sizeof(struct ether_hdr) + sizeof(struct tcpip_hdr));
+	memset(payload, 0, len);
+
+	/* Setup TCP/UDP+IP */
+	if (info->proto == IPPROTO_TCP) {
+		struct tcpip_hdr *tcpip = NULL;
+
+		tcpip = rte_pktmbuf_mtod_offset(mbuf, struct tcpip_hdr*,
+						sizeof(struct ether_hdr));
+		pkt_seq_setup_tcpip(info, tcpip);
+
+	} else {
+		struct udpip_hdr *udpip;
+
+		udpip = rte_pktmbuf_mtod_offset(mbuf, struct udpip_hdr*,
+						sizeof(struct ether_hdr));
+		pkt_seq_setup_udpip(info, udpip);
+	}
+
+	/* Setup Ethernet header */
+	eth_hdr = rte_pktmbuf_mtod(mbuf, struct ether_hdr*);
+	ether_addr_copy(&mac_src, &eth_hdr->s_addr);
+	ether_addr_copy(&mac_dst, &eth_hdr->d_addr);
+	eth_hdr->ether_type = rte_cpu_to_be_16(ETHER_TYPE_IPv4);
+
+	/* Setup Eth FCS */
+	crc = rte_pktmbuf_mtod_offset(mbuf, uint32_t*, info->pkt_len);
+	*crc = rte_hash_crc(rte_pktmbuf_mtod(mbuf, void *),
+					info->pkt_len, 0);
 }
 
 int pkt_seq_get_idx(struct rte_mbuf *pkt, uint32_t *idx)
